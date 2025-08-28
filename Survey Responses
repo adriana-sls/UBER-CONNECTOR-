@@ -1,0 +1,66 @@
+function updateSourceFromFeeder() {
+  const log = [];
+  
+  try {
+    // STEP 1: Open both spreadsheets
+    const sourceSS = SpreadsheetApp.openById("1CFQjue9XHI3Mp38lbfd9Q4buYjJqlaP1JGd-vCFtD1whGB4");
+    const feederSS = SpreadsheetApp.openById("1CycjnVAQgKLnpTZHgHFTOtmONnebzUPgLGzzcdcSjTk");
+    log.push("Opened both spreadsheets.");
+
+    // STEP 2: Get specific sheets
+    const sourceSheet = sourceSS.getSheetByName("Form Responses 1");
+    const feederSheet = feederSS.getSheetByName("Crew Members");
+    log.push("Loaded source sheet: Form Responses 1");
+    log.push("Loaded feeder sheet: Crew Members");
+
+    // STEP 3: Read data
+    const sourceData = sourceSheet.getDataRange().getValues();
+    const feederData = feederSheet.getDataRange().getValues();
+    log.push(`Read ${sourceData.length-1} rows from source, ${feederData.length-1} rows from feeder.`);
+
+    // STEP 4: Build lookup map for feeder emails
+    const feederMap = {};
+    feederData.slice(1).forEach((row, idx) => {
+      const email = row[15]; // Column P (0-based index 15)
+      if (email) {
+        feederMap[email.toLowerCase()] = {
+          colA: row[0],  // Column A
+          colI: row[8],  // Column I
+          colN: row[13], // Column N
+        };
+      }
+    });
+    log.push(`Created feeder lookup with ${Object.keys(feederMap).length} emails.`);
+
+    // STEP 5: Loop through source sheet and update values
+    const updates = [];
+    const emailCol = 2; // Column C (0-based index 2)
+    sourceData.slice(1).forEach((row, i) => {
+      const email = row[emailCol];
+      if (!email) return;
+
+      const match = feederMap[email.toLowerCase()];
+      if (match) {
+        const rowIndex = i + 2; // account for header + 1-indexing
+        updates.push({ row: rowIndex, U: match.colA, V: match.colN, W: match.colI });
+      }
+    });
+    log.push(`Matched ${updates.length} rows.`);
+
+    // STEP 6: Write updates back to source sheet
+    updates.forEach(u => {
+      sourceSheet.getRange(`U${u.row}`).setValue(u.U);
+      sourceSheet.getRange(`V${u.row}`).setValue(u.V);
+      sourceSheet.getRange(`W${u.row}`).setValue(u.W);
+      log.push(`Updated row ${u.row} → U:${u.U}, V:${u.V}, W:${u.W}`);
+    });
+
+    // Final log
+    log.push("Update completed successfully.");
+  } catch (e) {
+    log.push("ERROR: " + e.message);
+  }
+
+  // STEP 7: Output log
+  Logger.log(log.join("\n"));
+}
