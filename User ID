@@ -1,0 +1,140 @@
+/**
+ * Joins feeder -> source by User UUID and copies:
+ *   - Feeder G:AM (33 cols)  ->  Source B:AH (33 cols)
+ *   - Feeder A:B  (2 cols)   ->  Source AI:AJ (2 cols)
+ *   - Source AK:AM (remaining 5 cols) are cleared
+ *
+ * Tabs:
+ *  - Source: "Form Responses 1"   (Document: 1CFQjue9XHI3Mp38lbfd9Q4buYjJqlaP1JGd-vCFtD1w)
+ *  - Feeder: "Crew Members"       (Document: 1CycjnVAQgKLnpTZHgHFTOtmONnebzUPgLGzzcdcSjTk)
+ *
+ * Keys:
+ *  - Source key: column A (User UUID)
+ *  - Feeder key: column C (User UUID)
+ */
+function updateSourceFromFeeder() {
+  const LOG_SHEET_NAME = 'Sync Log';
+  const logs = [];
+  const startedAt = new Date();
+
+  // ---- CONFIG ----
+  const SOURCE_ID  = '1CFQjue9XHI3Mp38lbfd9Q4buYjJqlaP1JGd-vCFtD1w';
+  const FEEDER_ID  = '1CycjnVAQgKLnpTZHgHFTOtmONnebzUPgLGzzcdcSjTk';
+
+  const SOURCE_TAB = 'Form Responses 1';
+  const FEEDER_TAB = 'Crew Members';
+
+  // Column indices (0-based)
+  const SRC_UUID_COL   = 0;  // A
+  const FDR_UUID_COL   = 2;  // C
+  const FDR_START_COL  = 6;  // G
+  const FDR_END_COL    = 38; // AM
+  const SRC_START_COL  = 1;  // B
+  const SRC_END_COL    = 33; // AH (B..AH = 33 cols)
+
+  const SRC_AI_COL     = 34; // AI (0-based)
+  const SRC_AM_COL     = 38; // AM (0-based)
+
+  const feederColsCount = (FDR_END_COL - FDR_START_COL + 1); // 33
+
+  const colToA1 = (idxZeroBased) => {
+    let n = idxZeroBased + 1;
+    let s = '';
+    while (n > 0) {
+      let m = (n - 1) % 26;
+      s = String.fromCharCode(65 + m) + s;
+      n = Math.floor((n - 1) / 26);
+    }
+    return s;
+  };
+  const a1Range = (row1, col1Idx0, numRows, numCols) => {
+    const c1 = colToA1(col1Idx0);
+    const c2 = colToA1(col1Idx0 + numCols - 1);
+    return `${c1}${row1}:${c2}${row1 + numRows - 1}`;
+  };
+
+  try {
+    logs.push(`[STEP 1] Open spreadsheets`);
+    const srcSS = SpreadsheetApp.openById(SOURCE_ID);
+    const fdrSS = SpreadsheetApp.openById(FEEDER_ID);
+
+    logs.push(`[STEP 2] Get sheets`);
+    let srcSheet = srcSS.getSheetByName(SOURCE_TAB) || srcSS.getSheets()[0];
+    let fdrSheet = fdrSS.getSheetByName(FEEDER_TAB) || fdrSS.getSheets()[0];
+
+    logs.push(`- Source sheet: ${srcSheet.getName()}`);
+    logs.push(`- Feeder sheet: ${fdrSheet.getName()}`);
+
+    logs.push(`[STEP 3] Read data`);
+    const srcValues = srcSheet.getDataRange().getValues();
+    const fdrValues = fdrSheet.getDataRange().getValues();
+    const srcRows = srcValues.length - 1;
+    const fdrRows = fdrValues.length - 1;
+    logs.push(`- Source rows: ${srcRows}, Feeder rows: ${fdrRows}`);
+
+    logs.push(`[STEP 4] Build feeder lookup by UUID`);
+    const feederMap = new Map();
+    for (let r = 1; r < fdrValues.length; r++) {
+      const row = fdrValues[r];
+      const uuid = row[FDR_UUID_COL];
+      if (uuid) {
+        feederMap.set(String(uuid).trim().toUpperCase(), row);
+      }
+    }
+    logs.push(`- Built feeder map with ${feederMap.size} keys`);
+
+    logs.push(`[STEP 5] Stage updates`);
+    const outBlock1 = []; // B..AH (33 cols)
+    const outBlock2 = []; // AI..AM (8 cols)
+    let matchCount = 0;
+
+    for (let i = 1; i < srcValues.length; i++) {
+      const uuid = srcValues[i][SRC_UUID_COL];
+      const row1 = new Array(SRC_END_COL - SRC_START_COL + 1).fill('');
+      const row2 = new Array(SRC_AM_COL - SRC_AI_COL + 1).fill('');
+
+      if (uuid) {
+        const key = String(uuid).trim().toUpperCase();
+        const feederRow = feederMap.get(key);
+        if (feederRow) {
+          // G..AM → B..AH
+          const slice = feederRow.slice(FDR_START_COL, FDR_END_COL + 1);
+          for (let c = 0; c < slice.length; c++) row1[c] = slice[c];
+
+          // A → AI, B → AJ, AK..AM blank
+          row2[0] = feederRow[0]; // col A
+          row2[1] = feederRow[1]; // col B
+          // rest remain blank
+
+          matchCount++;
+          logs.push(`- Row ${i+1}: matched UUID, filled B..AH and AI..AJ`);
+        } else {
+          logs.push(`- Row ${i+1}: no feeder match for UUID`);
+        }
+      } else {
+        logs.push(`- Row ${i+1}: no UUID in source`);
+      }
+      outBlock1.push(row1);
+      outBlock2.push(row2);
+    }
+
+    logs.push(`[STEP 6] Write updates`);
+    if (srcRows > 0) {
+      const range1 = a1Range(2, SRC_START_COL, srcRows, SRC_END_COL - SRC_START_COL + 1);
+      srcSheet.getRange(range1).setValues(outBlock1);
+
+      const range2 = a1Range(2, SRC_AI_COL, srcRows, SRC_AM_COL - SRC_AI_COL + 1);
+      srcSheet.getRange(range2).setValues(outBlock2);
+
+      logs.push(`- Wrote block1: ${range1}`);
+      logs.push(`- Wrote block2: ${range2}`);
+    }
+
+    logs.push(`[STEP 7] Done. Matches: ${matchCount}`);
+
+  } catch (e) {
+    logs.push(`[ERROR] ${e.message}`);
+  }
+
+  Logger.log(logs.join('\n'));
+}
